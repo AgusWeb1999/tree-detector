@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Large geospatial data and generated outputs
+*.tif
+*.tiff
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.geojson
+*.joblib
+*.png
+*.jpg
+*.jpeg
+salida*/
+prediccion*/
+modelo*/
+tree_count_out/
+young_tree_out/
+
+# Local environments
+.venv/
+venv/
+env/
+.env
