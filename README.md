@@ -30,7 +30,7 @@ python3 ml_tree_detector.py train \
 ```bash
 python3 ml_tree_detector.py predict \
   --image "/ruta/nuevo_campo.tiff" \
-  --model "/ruta/modelo_arboles_v1/young_tree_model.joblib" \
+  --model "models/young_tree_model_v3.joblib" \
   --out-dir "/ruta/salida_prediccion" \
   --vegetation-percentile 62 \
   --min-score 0.08 \
@@ -61,6 +61,10 @@ arboles_detectados.csv
 
 ## Notas
 
-- No subir GeoTIFFs, modelos `.joblib` ni salidas pesadas al repo.
+- No subir GeoTIFFs, `.gpkg` productivos ni salidas pesadas al repo. El modelo inicial se incluye para facilitar uso y pruebas.
 - El modelo mejora mucho si los campos nuevos tienen resolución, altura de vuelo, época y tamaño de copa similares a los ejemplos de entrenamiento.
 - Si hay bosque, pasto o maleza parecida a las copas, conviene usar una AOI de plantación o sumar ejemplos corregidos de esas zonas.
+
+## Documentación
+
+Ver [docs/USAGE.md](docs/USAGE.md) para el flujo completo de uso, entrenamiento y mejora iterativa.
