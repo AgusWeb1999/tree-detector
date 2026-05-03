@@ -31,11 +31,13 @@ import joblib
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
+from rasterio.features import geometry_mask
 from rasterio.transform import Affine
 from rasterio.windows import Window
 from scipy import ndimage as ndi
 from scipy.spatial import cKDTree
 from shapely.geometry import Point, mapping, shape
+from shapely.ops import unary_union
 from skimage.feature import peak_local_max
 from skimage.filters import threshold_otsu
 from skimage.morphology import binary_closing, binary_opening, disk, remove_small_holes, remove_small_objects
@@ -156,6 +158,45 @@ def load_reference_pixels(gpkg: Path, src: rasterio.io.DatasetReader) -> np.ndar
     return np.array(pts, dtype=np.float32)
 
 
+def load_aoi_geometries(aoi: Path | None, src: rasterio.io.DatasetReader):
+    if aoi is None:
+        return None
+    layers = fiona.listlayers(aoi)
+    if not layers:
+        raise ValueError(f"No layers found in AOI {aoi}")
+    geoms = []
+    with fiona.open(aoi, layer=layers[0]) as layer:
+        if layer.crs and src.crs and layer.crs.to_string() != src.crs.to_string():
+            raise ValueError(f"AOI CRS mismatch: aoi={layer.crs}, raster={src.crs}")
+        for feat in layer:
+            geom = shape(feat.geometry)
+            if not geom.is_empty:
+                geoms.append(geom)
+    if not geoms:
+        raise ValueError(f"No geometries found in AOI {aoi}")
+    union = unary_union(geoms)
+    return [union]
+
+
+def aoi_mask_for_window(aoi_geoms, window: Window, src: rasterio.io.DatasetReader) -> np.ndarray | None:
+    if aoi_geoms is None:
+        return None
+    left, bottom, right, top = rasterio.windows.bounds(window, src.transform)
+    tile_box = shape({"type": "Polygon", "coordinates": [[(left, bottom), (right, bottom), (right, top), (left, top), (left, bottom)]]})
+    clipped = [g.intersection(tile_box) for g in aoi_geoms if g.intersects(tile_box)]
+    clipped = [g for g in clipped if not g.is_empty]
+    if not clipped:
+        return np.zeros((int(window.height), int(window.width)), dtype=bool)
+    transform = src.window_transform(window)
+    return geometry_mask(
+        [mapping(g) for g in clipped],
+        out_shape=(int(window.height), int(window.width)),
+        transform=transform,
+        invert=True,
+        all_touched=True,
+    )
+
+
 def estimate_spacing_from_points(points_px: np.ndarray, fallback_px: float) -> float:
     if len(points_px) < 8:
         return fallback_px
@@ -222,10 +263,13 @@ def propose_candidates_for_window(
     vegetation_percentile: float,
     min_score: float,
     valid_box: tuple[int, int, int, int] | None = None,
+    aoi_mask: np.ndarray | None = None,
 ) -> tuple[list[Candidate], dict[str, np.ndarray]]:
     rgb = read_rgb(src, window, meta.rgb_bands)
     idx = rgb_indices(rgb)
     mask = candidate_mask(idx, meta, vegetation_percentile)
+    if aoi_mask is not None:
+        mask &= aoi_mask
     resp = response_from_indices(idx, mask, meta)
     labels, nlab = ndi.label(mask)
     sizes = np.bincount(labels.ravel()) if nlab else np.array([0])
@@ -240,6 +284,8 @@ def propose_candidates_for_window(
     best: dict[int, Candidate] = {}
     for y, x in coords:
         if x < x0 or x >= x1 or y < y0 or y >= y1:
+            continue
+        if aoi_mask is not None and not aoi_mask[y, x]:
             continue
         lab = int(labels[y, x])
         if lab <= 0:
@@ -432,6 +478,10 @@ def train(args: argparse.Namespace) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     with rasterio.open(args.image) as src:
         reference_px = load_reference_pixels(args.reference_points, src)
+        # AOI is currently used during prediction. Training still accepts it so
+        # the CLI stays stable as the workflow evolves.
+        if args.aoi is not None:
+            load_aoi_geometries(args.aoi, src)
         meta = make_meta(src, reference_px, args.spacing_m, tuple(args.rgb_bands))
         meta.feature_names = feature_names()
         X, y = extract_training_features(
@@ -531,9 +581,15 @@ def predict(args: argparse.Namespace) -> None:
     proposed_total = 0
     max_prob_seen = 0.0
     with rasterio.open(args.image) as src:
+        aoi_geoms = load_aoi_geometries(args.aoi, src)
         total = math.ceil(src.width / (args.tile_size - args.tile_overlap)) * math.ceil(src.height / (args.tile_size - args.tile_overlap))
         for i, (win, valid) in enumerate(iter_tiles(src.width, src.height, args.tile_size, args.tile_overlap), 1):
-            cands, idx = propose_candidates_for_window(src, win, meta, args.vegetation_percentile, args.min_score, valid)
+            tile_aoi_mask = aoi_mask_for_window(aoi_geoms, win, src)
+            if tile_aoi_mask is not None and not np.any(tile_aoi_mask):
+                if i == 1 or i % 25 == 0:
+                    print(f"Processed tile {i}/{total}; proposed={proposed_total}; accepted before NMS={len(detections)}; max_prob={max_prob_seen:.3f}")
+                continue
+            cands, idx = propose_candidates_for_window(src, win, meta, args.vegetation_percentile, args.min_score, valid, tile_aoi_mask)
             proposed_total += len(cands)
             if cands:
                 X = np.vstack([
@@ -573,6 +629,7 @@ def build_parser() -> argparse.ArgumentParser:
     tr = sub.add_parser("train")
     tr.add_argument("--image", type=Path, required=True)
     tr.add_argument("--reference-points", type=Path, required=True)
+    tr.add_argument("--aoi", type=Path, default=None)
     tr.add_argument("--out-dir", type=Path, required=True)
     tr.add_argument("--rgb-bands", type=int, nargs=3, default=(1, 2, 3))
     tr.add_argument("--spacing-m", type=float, default=None)
@@ -590,6 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr = sub.add_parser("predict")
     pr.add_argument("--image", type=Path, required=True)
     pr.add_argument("--model", type=Path, required=True)
+    pr.add_argument("--aoi", type=Path, default=None)
     pr.add_argument("--out-dir", type=Path, required=True)
     pr.add_argument("--tile-size", type=int, default=1536)
     pr.add_argument("--tile-overlap", type=int, default=256)

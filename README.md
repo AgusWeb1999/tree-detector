@@ -31,6 +31,7 @@ python3 ml_tree_detector.py train \
 python3 ml_tree_detector.py predict \
   --image "/ruta/nuevo_campo.tiff" \
   --model "models/young_tree_model_v3.joblib" \
+  --aoi "/ruta/zonas_validas.gpkg" \
   --out-dir "/ruta/salida_prediccion" \
   --vegetation-percentile 62 \
   --min-score 0.08 \

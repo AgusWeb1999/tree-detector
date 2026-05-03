@@ -27,6 +27,7 @@ Para predecir en un GeoTIFF nuevo:
 python3 ml_tree_detector.py predict \
   --image "/ruta/nuevo_campo.tiff" \
   --model "models/young_tree_model_v3.joblib" \
+  --aoi "/ruta/zonas_validas.gpkg" \
   --out-dir "/ruta/salida_prediccion" \
   --vegetation-percentile 62 \
   --min-score 0.08 \
@@ -50,6 +51,8 @@ salida_prediccion/arboles_detectados.csv
 
 En QGIS, abrir `arboles_detectados.gpkg`. Si no aparece amarillo, cargar `arboles_detectados.qml` como estilo de capa.
 
+`--aoi` es opcional, pero muy recomendado. Debe ser un `.gpkg` con polígonos o cuadrículas que indiquen dónde sí se deben buscar árboles. El detector ignora bosque, pasto, caminos y bordes fuera de esos polígonos.
+
 ## Entrenar Un Modelo Nuevo
 
 Se necesita:
@@ -64,6 +67,7 @@ Ejemplo:
 python3 ml_tree_detector.py train \
   --image "/ruta/campo.tiff" \
   --reference-points "/ruta/puntos_correctos.gpkg" \
+  --aoi "/ruta/zonas_validas.gpkg" \
   --out-dir "/ruta/modelo_arboles_v4" \
   --rgb-bands 1 2 3 \
   --spacing-m 1.5 \
